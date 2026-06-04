@@ -1,0 +1,26 @@
+# Claude Code local state — never commit
+.claude/
+
+# Python build / virtualenv / caches — defense in depth
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Logfire client state
+.logfire/
+
+# Per-project secrets (each subproject also has its own .gitignore)
+.env
+.env.local
+.env.*.local
+
+# Run artefacts
+results/
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db

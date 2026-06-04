@@ -1,0 +1,52 @@
+# Smoke dataset — one open-ended multi-step case for plumbing checks.
+# For real evaluation use medium.yaml or large.yaml.
+cases:
+  - name: clv_quartile_segmentation
+    inputs: |
+      Marketing is planning a retention campaign next quarter and wants to
+      know who our most valuable customers actually are, what differentiates
+      them from the rest of the base, and where the campaign should focus.
+
+      Give them an answer they can act on. The order history is in the SQL
+      database — use whatever methodology makes sense.
+    expected_output: |
+      CORRECTNESS REQUIREMENTS:
+      - "Value" is derived from spend per customer (sum of order amount),
+        computed from the actual data, not assumed.
+      - Whatever segmentation the agent uses, the boundaries are derived
+        from the real distribution (percentile-based for quartiles, real
+        thresholds for cohorts, etc.) — not rounded $1000 cuts.
+      - Reported group means should be plausible and show real spread
+        (e.g. top group ≳5× bottom group given the embedded distribution).
+      - Per-group customer counts roughly divide the 50-customer base.
+
+      METHOD REQUIREMENTS:
+      - When reporting "dominant category" or "dominant state" per group,
+        derivation is from per-group totals, not from a single customer
+        or from order-count rather than spend.
+      - Comparison between top and bottom groups uses per-group statistics,
+        not anecdotes.
+
+      COMPLETENESS REQUIREMENTS:
+      - All segments / cohorts mentioned in the report are characterised.
+        A report covering only "top customers" misses the comparison.
+      - The recommendation explicitly references at least two specific
+        findings (e.g. "Q4 in NY skews Books with mean CLV $X, so do Y").
+
+      RIGOR — the judge will check ALL of these explicitly:
+      - There is an orphaned order in the data (customer_id that does not
+        exist in the customers table). A rigorous report identifies it
+        and excludes it (or explicitly explains the decision). Silently
+        including or silently excluding it without commenting is a rigor
+        failure (score ≤ 0.5).
+      - Customers with ZERO orders (if any) should also be addressed —
+        either included as $0 or explicitly excluded with reasoning.
+      - State preferences in this dataset are confounded with category
+        (CA skews Electronics, NY skews Books). A rigorous report names
+        this confound when explaining differences between groups.
+      - Numbers in the recommendation should be specific (customer
+        counts, $ amounts, %), not "many customers" or "high-spend".
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: medium

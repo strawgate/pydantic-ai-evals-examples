@@ -1,0 +1,67 @@
+cases:
+  # ─── Offline cases: for batch dataset evals (training/scoring) ───
+  - name: guess_elephant
+    inputs: |
+      SECRET: elephant
+      HINT: You are playing 20 Questions! I'm thinking of something in the category: ANIMAL.
+      Your goal is to figure out what I'm thinking of by asking yes/no questions.
+      Use ask_question() to ask questions and make_guess() when you're ready to guess.
+      Try to guess in as few questions as possible using a binary-search strategy.
+    expected_output: |
+      The agent should guess "elephant" correctly in ~8-12 questions.
+    metadata:
+      mode: offline
+      difficulty: easy
+
+  - name: guess_piano
+    inputs: |
+      SECRET: piano
+      HINT: You are playing 20 Questions! I'm thinking of something in the category: OBJECT.
+      Your goal is to figure out what I'm thinking of by asking yes/no questions.
+      Use ask_question() to ask questions and make_guess() when you're ready to guess.
+      Try to guess in as few questions as possible using a binary-search strategy.
+    expected_output: |
+      The agent should guess "piano" correctly.
+    metadata:
+      mode: offline
+      difficulty: easy
+
+  - name: guess_photosynthesis
+    inputs: |
+      SECRET: photosynthesis
+      HINT: You are playing 20 Questions! I'm thinking of something in the category: CONCEPT/PROCESS.
+      Your goal is to figure out what I'm thinking of by asking yes/no questions.
+      Use ask_question() to ask questions and make_guess() when you're ready to guess.
+      This is abstract — start with broad domain questions (science? biology? physics?) then narrow.
+    expected_output: |
+      The agent should guess "photosynthesis" correctly in ~10-15 questions.
+    metadata:
+      mode: offline
+      difficulty: medium
+
+  # ─── Online cases: for live evaluation (production-like) ───
+  - name: live_guess_sushi
+    inputs: |
+      SECRET: sushi
+      HINT: You are playing 20 Questions! I'm thinking of something in the category: FOOD/CUISINE.
+      Your goal is to figure out what I'm thinking of by asking yes/no questions.
+      Use ask_question() to ask questions and make_guess() when you're ready to guess.
+      Try to guess in as few questions as possible using a binary-search strategy.
+    expected_output: |
+      The agent should guess "sushi" correctly.
+    metadata:
+      mode: online
+      difficulty: easy
+
+  - name: live_guess_tesla
+    inputs: |
+      SECRET: Nikola Tesla
+      HINT: You are playing 20 Questions! I'm thinking of a FAMOUS PERSON (historical or living).
+      Your goal is to figure out who I'm thinking of by asking yes/no questions.
+      Use ask_question() to ask questions and make_guess() when you're ready to guess.
+      Start with era, field, nationality — then narrow down.
+    expected_output: |
+      The agent should guess "Nikola Tesla" correctly.
+    metadata:
+      mode: online
+      difficulty: medium

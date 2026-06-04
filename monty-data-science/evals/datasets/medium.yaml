@@ -1,0 +1,255 @@
+# Medium dataset — 5 open-ended multi-step cases + 1 online case.
+#
+# Inputs are business questions, not numbered recipes. The methodology
+# is the agent's job. The rubrics (expected_output) stay strict so the
+# judge can score against the gaps a competent DS would actually catch.
+cases:
+  # ─── Offline (batch) cases ───
+
+  - name: clv_quartile_segmentation
+    inputs: |
+      Marketing is planning a retention campaign next quarter and wants to
+      know who our most valuable customers actually are, what differentiates
+      them from the rest of the base, and where the campaign should focus.
+
+      Give them an answer they can act on. The order history is in the SQL
+      database — use whatever methodology makes sense.
+    expected_output: |
+      CORRECTNESS:
+      - "Value" derived from per-customer spend, computed from real data.
+      - Whatever segmentation is used, boundaries come from the actual
+        distribution (percentile-based or similar), not rounded cuts.
+      - Top group should be ≳5× bottom group on mean spend given the
+        embedded distribution.
+
+      METHOD:
+      - "Dominant category / state" per group derived from per-group SUMS,
+        not order counts or single representative customers.
+
+      COMPLETENESS:
+      - All segments characterised, not just the top.
+      - Recommendation explicitly references at least two specific
+        findings with numbers.
+
+      RIGOR — explicit checks:
+      - There is an orphaned order (customer_id=999 not in customers).
+        Identify and exclude it (or explicitly justify keeping it).
+        Silent inclusion or silent exclusion is a rigor failure.
+      - State × category confound (CA→Electronics, NY→Books) named when
+        comparing top vs bottom groups.
+      - Recommendation uses specific numbers, not "many" / "high-spend".
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: medium
+
+  - name: reorder_priority_with_velocity
+    inputs: |
+      The warehouse team is asking which products we should reorder soon
+      and where to ship them from. They want a prioritised list, not a
+      data dump, and a clear "do this first" recommendation.
+    expected_output: |
+      CORRECTNESS:
+      - Sales velocity for each at-risk product is computed from actual
+        order history, not assumed.
+      - Time-until-stockout is computed from current stock and observed
+        velocity, with the denominator (active window) made explicit.
+
+      METHOD:
+      - At-risk products are those below reorder threshold AND with
+        meaningful velocity. The two conditions together — not either
+        alone.
+      - Velocity = 0 / no recent sales products are handled explicitly
+        (not silently ranked).
+
+      COMPLETENESS:
+      - A ranked at-risk list with the supporting numbers per product.
+      - A regional recommendation tied to where the at-risk products
+        actually sell (most common customer state per product from
+        order history).
+
+      RIGOR — explicit checks:
+      - If "urgent" (low stock + projected to stock out soon) is empty,
+        the agent must say so explicitly AND still characterise the
+        next-most-urgent products instead of skipping the recommendation.
+      - The warehouse recommendation names specific products AND specific
+        states, not a generic "ship from West Coast".
+      - The active-window denominator (first-order to last-order span)
+        is explained, not just asserted.
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: medium
+
+  - name: pricing_anomaly_investigation
+    inputs: |
+      The finance team is worried about data quality in our orders. Some
+      orders look like the amounts don't match the products' catalog
+      prices, and they want to know if there's a real problem, how big it
+      is, and what's likely causing each weird order.
+
+      Investigate and report back with a confirmed list and your best
+      guess at the cause for each.
+    expected_output: |
+      CORRECTNESS:
+      - Effective unit price (amount / quantity) is computed for every
+        order, not estimated.
+      - The threshold for "anomalous" is stated and applied consistently
+        across orders.
+
+      METHOD:
+      - For each anomaly that survives the threshold, follow-up evidence
+        is pulled from the customer's other orders of the same product
+        (not just the same product across all customers).
+      - Classifications (overcharge / discount / data-entry slop) are
+        backed by the follow-up evidence, not asserted.
+
+      COMPLETENESS:
+      - The report covers both directions of deviation (overcharges AND
+        discounts), at least one of each.
+      - For each flagged anomaly, the report shows: the order details, the
+        catalog price, the effective price, and the supporting evidence.
+
+      RIGOR — explicit checks (this case has TRAPS):
+      - The seed contains a 1-CENT rounding anomaly (effective price
+        differs from catalog by ~$0.01). This is data-entry slop, not a
+        real anomaly. A rigorous report identifies it, classifies it as
+        rounding noise, and EXCLUDES it from the confirmed list. Including
+        it as a real anomaly caps rigor at ≤ 0.5.
+      - Report the count of orders examined and the count flagged so the
+        reader can judge whether this is widespread.
+      - "I think this is X" with no evidence ≤ 0.5 on rigor.
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: hard
+
+  - name: cohort_retention_curve
+    inputs: |
+      Leadership wants to understand how well we're retaining customers
+      over time. Are newer cohorts behaving differently from older ones?
+      Build whatever view of the data makes this question answerable,
+      then tell them what you see and what (if anything) it means.
+    expected_output: |
+      CORRECTNESS:
+      - Cohorts are defined by customer signup time (created_at), not by
+        an arbitrary bucketing.
+      - Retention rates are computed against the cohort's full size, not
+        the subset that ever ordered.
+
+      METHOD:
+      - "Retained in month K" is derived from order_date relative to the
+        cohort's signup month, not absolute calendar months.
+      - The reference date for "today" comes from the data (meta table or
+        max(order_date)), not assumed.
+
+      COMPLETENESS:
+      - All cohorts are shown with their sizes; small cohorts aren't
+        silently dropped.
+      - The report compares specific cohorts and engages with composition
+        differences (segment mix, state mix, maturity), not just a vague
+        "retention is going down".
+
+      RIGOR — explicit checks (this case has a TRAP):
+      - Cohort cells where the K-month window has not fully elapsed yet
+        (cohort signup_month + K > current reference month) MUST be
+        flagged as not-yet-observable (N/A or similar), not reported as
+        0%. Any not-yet-observable cell reported as a real 0% caps rigor
+        at ≤ 0.4.
+      - Cohort sizes are tiny in this dataset (~3-6 customers per month).
+        A rigorous report flags this when discussing differences between
+        cohorts — small-n means high noise.
+      - Hypothesis for differences should be specific (segment mix, state
+        mix, maturity) — generic "newer cohorts buy less" is not enough.
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: hard
+
+  - name: churn_risk_scoring
+    inputs: |
+      Customer success wants a list of customers we should reach out to
+      before they churn. They want a ranked list (top of the list = most
+      important to reach out to) and a concrete recommendation for what
+      we should actually do with the people at the top.
+
+      They trust your judgement on how to define and rank churn risk.
+    expected_output: |
+      CORRECTNESS:
+      - Recency derived from reference_date minus the customer's last
+        order_date, not assumed.
+      - "Churn risk" is a quantitative score, not just a sort order on
+        a single dimension.
+
+      METHOD:
+      - The risk score combines recency AND value (total spend) — recency
+        alone is insufficient because losing high-value customers hurts
+        more than losing low-value ones at the same recency.
+      - Score terms are scaled/normalised so no single term dominates by
+        magnitude alone.
+      - The formula is stated explicitly enough that someone could
+        reproduce it (an equation or pseudocode), not just described in
+        prose.
+
+      COMPLETENESS:
+      - The top-N is enriched via a follow-up query against orders
+        (state, segment, top category per customer) — not just
+        customer IDs.
+      - Recommendation references the SPECIFIC observed commonality among
+        the top-N ("6 of 10 are CA small-biz buying Electronics, target X")
+        not a generic segment.
+
+      RIGOR — explicit checks:
+      - Customers with zero orders must be excluded with the exclusion
+        explicitly reported. Silent exclusion is a rigor failure.
+      - Customers with exactly 1 order have undefined "mean days between
+        orders" — the agent must say so, not produce a misleading 0.
+      - High-frequency customers with sudden gaps (ordering weekly then
+        silent for 60 days) are more at-risk than infrequent customers
+        at the same days-since-last-order. A rigorous score reflects
+        this; flag if it does NOT.
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: hard
+
+  # ─── Online case (production-sim) ───
+
+  - name: state_revenue_concentration_and_risk
+    inputs: |
+      The CFO is worried we're too dependent on a few customers or
+      regions and wants to know our concentration risk. Tell them
+      whether we should be worried, and if so where the exposure is.
+    expected_output: |
+      CORRECTNESS:
+      - Per-state revenue uses delivered orders only (status filter
+        applied). Pending / shipped orders haven't actually been paid.
+      - Cumulative share is computed on sorted-descending shares.
+
+      METHOD:
+      - "Top contributors" are identified via cumulative share
+        (Pareto-style), not a hardcoded N.
+      - Both forms of concentration risk are considered: revenue
+        concentrated by state, AND revenue within a state concentrated
+        by a single customer.
+
+      COMPLETENESS:
+      - At least one drill-down is actually executed — e.g. for the
+        highest-share state, the within-state top-customer share is
+        computed.
+      - The risk verdict ("yes / no, here's why") references specific
+        numbers.
+
+      RIGOR — explicit checks:
+      - The status filter MUST be applied; using all orders (including
+        pending) is a method failure ≤ 0.5.
+      - If no single-customer-within-state risk exists, the report must
+        explicitly say so AND show the top-customer share that justifies
+        the conclusion. Silently omitting the risk flag is a rigor
+        failure.
+      - The recommendation distinguishes state-concentration risk from
+        in-state customer-concentration risk — they are different.
+    metadata:
+      mode: online
+      category: data_science
+      difficulty: medium

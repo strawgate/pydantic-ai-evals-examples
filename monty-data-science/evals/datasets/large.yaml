@@ -1,0 +1,399 @@
+# Large dataset — full multi-step DS suite. Carries over the medium offline
+# cases with the same strict rubrics, plus 3 additional hard cases and an
+# extra online case.
+#
+# The carry-over rubrics here MUST stay in sync with medium.yaml so the
+# scoring is consistent across both datasets. If you change a rubric in
+# medium.yaml, mirror it here.
+cases:
+  # ─── Carried over from medium.yaml (rubrics kept in sync) ───
+
+  - name: clv_quartile_segmentation
+    inputs: |
+      Compute customer lifetime value (CLV = sum of orders.amount) per
+      customer, excluding orphaned orders. Segment customers into four
+      quartiles by CLV (Q1 top, Q4 bottom). For each quartile report:
+      customer count, mean CLV, median CLV, mean orders per customer,
+      dominant product category (by total spend), and dominant state.
+      Identify the two characteristics most differentiating Q1 from Q4 and
+      recommend one concrete sales/marketing action.
+    expected_output: |
+      CORRECTNESS:
+      - Quartile boundaries derived from the actual CLV distribution.
+      - Q1 mean CLV should be ≳5× Q4 mean CLV.
+      - Quartiles roughly even in customer count (≈12–13 each).
+
+      METHOD:
+      - Dominant category from per-quartile category spend SUM.
+      - Dominant state derived per quartile, not assumed.
+
+      COMPLETENESS:
+      - All four quartiles reported.
+      - Recommendation references ≥ 2 specific findings with numbers.
+
+      RIGOR — explicit checks:
+      - Orphan order (customer_id=999) MUST be flagged and excluded.
+      - State × category confound (CA→Electronics, NY→Books) named when
+        comparing Q1 and Q4.
+      - Quartile-boundary CLV values reported.
+      - Recommendation uses specific numbers, not "many" / "high-spend".
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: medium
+
+  - name: reorder_priority_with_velocity
+    inputs: |
+      For each product, compute sales velocity = total units sold divided
+      by days between the product's first and last order (one-order-day
+      products: denominator = 1, flag as low-confidence). Project
+      days_until_stockout = current stock / velocity. Categorise as URGENT
+      (stockout ≤14 days AND below reorder_threshold), WATCH (below
+      threshold but stockout >14 days), or OK. Return the URGENT list
+      ranked by days_until_stockout. For each URGENT product, run a
+      follow-up query to find its dominant customer state, then recommend
+      regional warehouse prioritisation.
+    expected_output: |
+      CORRECTNESS:
+      - Velocity from actual first/last order dates per product.
+      - days_until_stockout from current stock and velocity.
+
+      METHOD:
+      - Active-window denominator explained.
+      - URGENT is a strict subset of low-stock products.
+
+      COMPLETENESS:
+      - All five steps addressed with evidence.
+      - Follow-up state query actually executed per URGENT product.
+
+      RIGOR — explicit checks:
+      - If URGENT is empty, the agent must say so explicitly and still
+        execute the follow-up on the next-most-urgent (WATCH) products.
+        Skipping the follow-up because URGENT is empty is a rigor failure.
+      - Velocity 0 / NaN products handled explicitly.
+      - Warehouse recommendation cites specific product names AND dominant
+        state per product.
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: medium
+
+  - name: pricing_anomaly_investigation
+    inputs: |
+      Compute effective_unit_price = amount/quantity per order. Flag as
+      anomalous when |effective - catalog|/catalog > 0.05. Classify each
+      anomaly as OVERCHARGE, DEEP DISCOUNT, or ROUNDING (within 1 unit of
+      catalog — noise, do not flag). For each non-rounding anomaly, pull
+      the customer's other orders of the same product and use that
+      evidence to confirm/revise the classification. Final output: table
+      of confirmed anomalies excluding rounding.
+    expected_output: |
+      CORRECTNESS:
+      - effective_unit_price computed for every order.
+      - 5% threshold applied consistently.
+
+      METHOD:
+      - Follow-up query JOINs on customer × product.
+
+      COMPLETENESS:
+      - ≥1 OVERCHARGE and ≥1 DEEP DISCOUNT identified.
+      - Final table contains the required columns.
+
+      RIGOR — explicit checks (this case has TRAPS):
+      - The seed contains a 1-CENT ROUNDING anomaly. A rigorous report
+        identifies it, classifies as ROUNDING, and EXCLUDES it from the
+        final table. Including it as a real anomaly ≤ 0.5 on rigor.
+      - OVERCHARGE/DEEP DISCOUNT classification supported by the follow-up
+        query evidence, not asserted.
+      - Report the count of orders examined and the count flagged before
+        the table.
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: hard
+
+  - name: cohort_retention_curve
+    inputs: |
+      Build a monthly signup-cohort retention matrix: rows = signup
+      cohorts (by customers.created_at month), cols = months_since_signup
+      0..6, cells = % of the cohort with ≥1 order in that month relative
+      to signup. Include cohort size in the leftmost column. Mark cells
+      that are not yet observable (signup_month + K > reference_month) as
+      N/A, not 0. Identify the cohort with the highest and lowest 3-month
+      retention and propose ONE hypothesis for the gap.
+    expected_output: |
+      CORRECTNESS:
+      - Cohorts defined by signup month.
+      - Retention % computed against the cohort's full size.
+
+      METHOD:
+      - "Active in month K" derived from order_date relative to created_at.
+      - Reference date from meta.reference_date.
+
+      COMPLETENESS:
+      - All cohorts shown with sizes.
+      - High-vs-low hypothesis engages with composition or maturity.
+
+      RIGOR — explicit checks (this case has a TRAP):
+      - Cohort cells where month_K is not yet observable MUST be N/A, not
+        0%. Any 0% cell where N/A is correct caps rigor at 0.4.
+      - Small cohorts (n ≤ 3) flagged as noisy when discussing extremes.
+      - Hypothesis is SPECIFIC (segment / state composition), not generic.
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: hard
+
+  - name: churn_risk_scoring
+    inputs: |
+      Read reference_date from meta. Define churn as
+      days_since_last_order > 60. For every customer with ≥1 order, compute
+      days_since_last_order, total_orders, total_spent, and
+      mean_days_between_orders. Build a composite risk score in [0,1]
+      combining BOTH recency AND total_spent — state your formula and why.
+      Rank by risk, take the top 10, enrich via a follow-up query (state,
+      segment, top category). Recommend ONE concrete intervention tied to
+      what the top-10 share.
+    expected_output: |
+      CORRECTNESS:
+      - reference_date from meta.
+      - days_since_last_order = reference_date − max(order_date).
+      - mean_days_between_orders for customers with ≥2 orders only.
+
+      METHOD:
+      - Score formula stated explicitly with each term's role explained.
+      - Both recency AND spend contribute.
+      - Term scaling explained (normalisation, log, etc).
+
+      COMPLETENESS:
+      - Top-10 enriched via real follow-up query.
+      - Intervention tied to top-10 commonality.
+
+      RIGOR — explicit checks:
+      - Customers with zero orders excluded with the exclusion reported.
+      - Customers with exactly 1 order: mean_days_between_orders is N/A.
+      - Risk-score formula stated as an equation.
+      - Intervention references the SPECIFIC observed commonality
+        ("7/10 are in CA bought Electronics"), not a generic segment.
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: hard
+
+  # ─── New harder cases ───
+
+  - name: state_category_subgroup_analysis
+    inputs: |
+      The marketing team thinks Electronics is our top category overall, but
+      they suspect this hides regional differences. Investigate:
+
+      1. Compute total revenue per category across all customers. Rank.
+      2. Compute total revenue per (state, category) for the top 4 states by
+         customer count. Rank within each state.
+      3. Compare the aggregate ranking to the per-state rankings. Specifically:
+         is the #1 category the same in every top state, or do some states
+         have a different top category?
+      4. Quantify the subgroup pattern: pick the state where the top category
+         most differs from the aggregate and report by how much (percentage
+         points of revenue share).
+      5. Recommend whether category strategy should be national or state-tiered,
+         using the actual numbers from steps 1–4.
+    expected_output: |
+      CORRECTNESS:
+      - Category totals = SUM of order amounts grouped by product category.
+      - Per-(state, category) totals use the same source; numbers should
+        reconcile (per-state subtotals across categories ≈ state totals).
+
+      METHOD:
+      - "Top 4 states by customer count" derived from customers table, not
+        from order counts.
+      - Subgroup share = state-category-revenue / state-revenue, not / total.
+
+      COMPLETENESS:
+      - Aggregate ranking + four per-state rankings + a quantified gap +
+        a national-vs-tiered recommendation.
+
+      RIGOR — explicit checks:
+      - The embedded pattern is CA → Electronics, NY → Books. A rigorous
+        report identifies this specific contrast, naming both states.
+        Generic "regional differences exist" without naming the states /
+        categories ≤ 0.5 on rigor.
+      - The "size of the gap" must be a number (percentage points of
+        revenue share), not "noticeably different".
+      - The recommendation must distinguish between volume (national
+        strategy) and mix (tiered) — these are different problems.
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: hard
+
+  - name: repeat_purchase_interval_distribution
+    inputs: |
+      For customers with at least 3 orders, compute the distribution of
+      inter-order intervals (days between consecutive orders). Then:
+
+      1. Report the overall distribution: mean, median, std, 25th/75th
+         percentile of all inter-order intervals.
+      2. Per-segment (consumer / small_biz / enterprise): the same statistics.
+      3. For each segment, classify customers as 'regular' if their std of
+         intervals is below the segment-wide median std, or 'sporadic' otherwise.
+         Report the share of each.
+      4. Run a follow-up query to check whether regular customers have a
+         higher total_spent than sporadic ones within the same segment.
+         Report mean spend per (segment, regularity).
+      5. State whether 'regularity' looks like a useful predictor of CLV,
+         and how strong the signal is.
+    expected_output: |
+      CORRECTNESS:
+      - Intervals = diffs of sorted per-customer order_dates.
+      - Std of intervals undefined for customers with <2 intervals (i.e. <3
+        orders); those customers MUST be excluded.
+
+      METHOD:
+      - Regular/sporadic threshold is segment-relative (segment-wide median
+        std), NOT a global cutoff.
+      - The CLV comparison is a per-(segment, regularity) mean, not a global
+        regular-vs-sporadic comparison that ignores segment.
+
+      COMPLETENESS:
+      - Overall distribution + per-segment distribution + regularity share
+        per segment + CLV comparison + a "predictor" conclusion.
+
+      RIGOR — explicit checks:
+      - Sample size per segment must be reported. With ~50 customers split
+        across 3 segments, some segments may be too small (<5) to support
+        a stable conclusion. A rigorous report flags this when it applies.
+      - The "regularity predicts CLV" claim must be quantified: "$X more
+        in segment Y" or "Z% higher", with the absolute spread, not just
+        a direction.
+      - If any segment has fewer than 3 'regular' OR 3 'sporadic' customers,
+        the CLV comparison for that segment is unreliable and must be flagged
+        as such — using it anyway is a rigor failure (≤ 0.5).
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: hard
+
+  - name: stockout_revenue_at_risk
+    inputs: |
+      Quantify the revenue at risk from products that may stock out in the
+      next 30 days.
+
+      1. Compute per-product sales velocity (units/day) from order history.
+      2. Project days_until_stockout for every product.
+      3. For products projected to stock out in ≤30 days, compute the
+         projected lost revenue over the next 30 days assuming velocity holds
+         (units_short × catalog_price). units_short = max(0, 30 * velocity - stock_quantity).
+      4. Rank products by projected lost revenue. Report the top 5.
+      5. For the top product on this list, run a follow-up query to identify
+         which customer state(s) historically buy it most, and recommend
+         whether to expedite restock or substitute.
+      6. Report the total projected at-risk revenue across all flagged products
+         and compare to recent monthly revenue (last 30 days of orders).
+    expected_output: |
+      CORRECTNESS:
+      - Velocity computed consistently with reorder_priority_with_velocity
+        (units/day across the product's active window).
+      - units_short formula applied as defined: max(0, 30 × velocity − stock).
+
+      METHOD:
+      - Lost revenue uses CATALOG price (products.price), NOT amounts from
+        the orders table. Order amounts include the embedded pricing
+        anomalies and would skew the estimate.
+      - "Recent monthly revenue" computed from delivered orders in the last
+        30 days vs reference_date (or max order_date), not entire history.
+
+      COMPLETENESS:
+      - Top-5 at-risk list + per-product at-risk revenue + total + comparison
+        to recent monthly revenue + follow-up state query for the #1 + a
+        restock-vs-substitute recommendation.
+
+      RIGOR — explicit checks (this case shares a TRAP with the reorder task):
+      - Products with velocity = 0 or no recent orders MUST NOT appear in
+        the at-risk list (their stockout is irrelevant). A rigorous report
+        explicitly says how zero-velocity products are handled.
+      - Using order amounts instead of catalog price for lost-revenue is a
+        method failure (≤ 0.5) — it bakes in the pricing anomalies.
+      - The at-risk vs recent-monthly comparison must be presented as a
+        ratio or % ("at-risk revenue is X% of last 30 days' revenue"),
+        not just two dollar figures side by side.
+      - If the top product has only a single dominant state in its order
+        history, the restock recommendation should be that state-specific;
+        if it's spread across states, the recommendation should be
+        national. The dominance check must be visible (top-state share %).
+    metadata:
+      mode: offline
+      category: data_science
+      difficulty: hard
+
+  # ─── Online cases (production-sim) ───
+
+  - name: state_revenue_concentration_and_risk
+    inputs: |
+      Revenue concentration analysis: per-state revenue (delivered only),
+      identify the Pareto top-80% set of states, then for the highest-share
+      state compute within-state concentration (top-3-customer share). Flag
+      single-customer risk if any single customer in a top-share state owns
+      >20% of that state's revenue. Recommend whether the business has
+      customer-concentration risk in any top state with supporting numbers.
+    expected_output: |
+      CORRECTNESS:
+      - Per-state revenue uses delivered orders ONLY (status filter applied).
+      - Cumulative share computed on sorted-descending shares.
+
+      METHOD:
+      - Pareto top-80% set built from cumulative shares, not hardcoded N.
+      - Within-state top-3 share computed within the same filtered subset.
+
+      RIGOR — explicit checks:
+      - Order-status filter must be applied; using all orders is a method
+        failure (≤ 0.5).
+      - If no single-customer risk exists, the report must explicitly state
+        "no risk" AND show the top-customer share that justifies it. Silent
+        omission of the risk flag is a rigor failure.
+      - Distinguish state-concentration risk from in-state customer-concentration
+        risk — they are different and the recommendation should address
+        whichever actually applies.
+    metadata:
+      mode: online
+      category: data_science
+      difficulty: medium
+
+  - name: weekday_vs_weekend_purchasing
+    inputs: |
+      Compare weekday vs weekend purchasing.
+
+      1. Bucket every order by weekday (Mon-Sun derived from order_date).
+      2. Report per-bucket: order count, total revenue, mean order amount.
+      3. Aggregate to weekday vs weekend. Test whether the mean order amount
+         differs (a back-of-envelope test is fine — show a difference of
+         means with a rough significance heuristic such as |Δ| > 1 × pooled
+         SE).
+      4. If a meaningful difference exists, run a follow-up query to see
+         whether it's driven by a particular category or customer segment.
+      5. Recommend whether marketing schedule (when to push promotions)
+         should differ on weekends.
+    expected_output: |
+      CORRECTNESS:
+      - Day-of-week derived from order_date correctly (Mon=0..Sun=6 or
+        similar; consistent throughout).
+      - Weekend = Sat + Sun. Weekday = Mon–Fri.
+
+      METHOD:
+      - Mean-difference check uses pooled SE or similar variance estimate,
+        not just |mean_weekend - mean_weekday|.
+      - "Significant" threshold stated explicitly (e.g. |Δ| > 1 × pooled SE).
+
+      RIGOR — explicit checks:
+      - With ~288 orders, weekend may have ~80 vs weekday ~200; the SE
+        comparison should account for unequal sample sizes.
+      - If the test is NOT significant, the agent must say so explicitly
+        and the marketing recommendation should reflect "no schedule change
+        needed". Recommending a weekend-specific promo without a
+        significant difference is a reasoning failure (≤ 0.5).
+      - If the test IS significant, the follow-up drilldown MUST be
+        executed (not described as planned).
+    metadata:
+      mode: online
+      category: data_science
+      difficulty: medium

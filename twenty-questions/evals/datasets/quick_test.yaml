@@ -1,0 +1,13 @@
+cases:
+  - name: guess_elephant
+    inputs: |
+      SECRET: elephant
+      HINT: You are playing 20 Questions! I'm thinking of something in the category: ANIMAL.
+      Your goal is to figure out what I'm thinking of by asking yes/no questions.
+      Use ask_question() to ask questions and make_guess() when you're ready to guess.
+      Try to guess in as few questions as possible using a binary-search strategy.
+    expected_output: |
+      The agent should guess "elephant" correctly in ~8-12 questions.
+    metadata:
+      mode: offline
+      difficulty: easy

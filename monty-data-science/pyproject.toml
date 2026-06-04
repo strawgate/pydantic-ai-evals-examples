@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "monty-data-science"
+version = "0.1.0"
+description = "Data-science evals — Pydantic AI agent solves analytics tasks via Monty CodeMode + SQL tools"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic-ai[logfire]>=1.102.0",
+    "pydantic-ai-harness[codemode]>=0.3.0",
+    "pydantic-evals[logfire]>=1.102.0",
+    "pydantic-monty>=0.0.17",
+    "logfire>=3.0.0",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-timeout>=2.3.0",
+    "ruff>=0.8.0",
+    "ty>=0.0.1a7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/monty_data_science"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["evals"]
+timeout = 1800
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+extend-select = ["I", "B", "C4", "UP"]
+
+# ==============================================================================
+# ty — Pydantic's type checker
+# ==============================================================================
+
+[tool.ty]
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.src]
+include = ["src", "evals"]
+
+[tool.ty.rules]
+possibly-missing-attribute = "warn"
+invalid-argument-type = "warn"
+missing-argument = "error"
+unknown-argument = "error"
+too-many-positional-arguments = "error"
