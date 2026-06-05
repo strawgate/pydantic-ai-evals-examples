@@ -3,7 +3,14 @@ ENV_FILE ?= .env
 DATASET ?= evals/datasets/small.yaml
 PYTHON := uv run python
 
-.PHONY: help install eval eval-online eval-all eval-judge eval-pytest live lint format reset-prompt
+.PHONY: help install eval eval-online eval-all eval-judge eval-pytest live lint format reset-prompt \
+	seed demo demo-start demo-stop demo-status demo-logs
+
+# Background trace-traffic controls (the continuous-improvement demo). The
+# pattern matches the venv console-script process; `[.]venv` is written with a
+# bracket so the pgrep/pkill lines don't match themselves.
+DEMO_LOG ?= demo.log
+DEMO_MATCH := [.]venv/bin/demo
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -11,6 +18,43 @@ help: ## Show this help
 
 install: ## Install dependencies
 	uv sync
+
+# ==============================================================================
+# Continuous-improvement demo (see DEMO.md)
+# ==============================================================================
+
+seed: ## Reset the managed variable to the wrong-schema "before" state (+ fresh optimizer window)
+	uv run seed-demo-variable
+
+demo: ## Generate trace traffic in the FOREGROUND (Ctrl-C to stop). Pass args via DEMO_ARGS="--workers 5"
+	uv run demo $(DEMO_ARGS)
+
+demo-start: ## Start trace traffic in the BACKGROUND (logs to demo.log)
+	@if pgrep -f "$(DEMO_MATCH)" >/dev/null 2>&1; then \
+		echo "Demo traffic already running — 'make demo-status'. Use 'make demo-stop' to restart."; \
+	else \
+		nohup uv run demo $(DEMO_ARGS) > $(DEMO_LOG) 2>&1 & \
+		sleep 2; \
+		echo "Started demo traffic in the background -> $(DEMO_LOG)"; \
+		echo "  watch:  make demo-logs     status: make demo-status     stop: make demo-stop"; \
+	fi
+
+demo-stop: ## Stop background trace traffic
+	@pkill -INT -f "$(DEMO_MATCH)" 2>/dev/null && sleep 2 || true
+	@pkill -f "$(DEMO_MATCH)" 2>/dev/null || true
+	@echo "Stopped demo traffic."
+
+demo-status: ## Show whether background traffic is running + recent runs
+	@if pgrep -f "$(DEMO_MATCH)" >/dev/null 2>&1; then \
+		echo "RUNNING (pid $$(pgrep -f '$(DEMO_MATCH)' | tr '\n' ' '))"; \
+		printf "  completed runs: "; grep -cE '#[0-9]+ (ok|FAIL)' $(DEMO_LOG) 2>/dev/null || true; \
+		grep -E '#[0-9]+ (ok|FAIL)' $(DEMO_LOG) 2>/dev/null | tail -3 || true; \
+	else \
+		echo "NOT running. Start with 'make demo-start'."; \
+	fi
+
+demo-logs: ## Follow the background traffic log
+	@touch $(DEMO_LOG); tail -f $(DEMO_LOG)
 
 eval: ## Run offline eval on small dataset (override with DATASET=evals/datasets/medium.yaml)
 	ENV_FILE=$(ENV_FILE) $(PYTHON) evals/run_eval.py --env $(ENV_FILE) --dataset $(DATASET) --mode offline
