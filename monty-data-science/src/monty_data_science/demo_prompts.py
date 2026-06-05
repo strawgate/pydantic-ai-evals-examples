@@ -1,122 +1,77 @@
 """Prompts for the continuous-improvement demo.
 
-``WRONG_SCHEMA_PROMPT`` is the value we seed into the managed variable as the
-"before" state. It is what a real team's prompt looks like a week after someone
-ran a migration nobody told the agent about:
+The demo's "before" state (``BEFORE_PROMPT``) is an ordinary, reasonable system
+prompt: it tells the agent the data is in a SQL database and that it can use
+``list_tables`` / ``describe_table`` to find its way around — but it ships **no
+schema**. So on every request the agent has to discover the schema before it can
+write queries. That rediscovery is the same on every run (the schema never
+changes), so it's pure repeated work — a couple of extra model turns each time
+that show up as wasted latency, tokens, and cost. Nothing here tells the agent
+to be inefficient; it just isn't given the one stable fact that would let it
+skip the lookup.
 
-  * a confident, specific **schema section** that documents the PRE-migration
-    column names (``created_at``, ``amount``, ``order_date``,
-    ``stock_quantity``) — every one of which the live database (see
-    ``tools.seed_database``) has since renamed, and
-  * the repo's existing, deliberately-mediocre data-science guidance.
+The Logfire optimizer, reading the traces, should notice that the agent does
+the same schema discovery every time and **bake the schema into the prompt** so
+the agent can skip it and answer directly. ``IDEAL_AFTER_PROMPT`` is what a good
+proposal looks like — it's NOT given to the agent; it's the reference we use to
+eyeball whether a proposal actually eliminated the rediscovery.
 
-When the agent trusts this prompt it writes SQL against columns that no longer
-exist, hits ``no such column`` errors, introspects the live catalog, rewrites,
-and recovers — burning extra requests/tokens/latency on every single run.
-
-The Logfire optimizer, reading those trace trajectories, should propose a
-corrected prompt: the schema section updated to the live names (and, if we
-keep the bad DS guidance, ideally the worst of that cleaned up too).
-
-``CORRECT_SCHEMA_BLOCK`` is NOT given to the agent. It's the reference we use
-to eyeball whether an optimizer proposal actually fixed the schema.
+(The optimizer is failure-driven by default, so getting it to optimize for
+*efficiency* — fewer model calls — uses the per-variable optimizer
+system-prompt override; see ``OPTIMIZER_PROMPT.md`` and DEMO.md.)
 """
 
 from __future__ import annotations
 
-# ---------------------------------------------------------------------------
-# The schema section as the (now outdated) prompt documents it.
-#
-# Every column marked below with "‹renamed›" no longer exists under this name
-# in the live DB. The agent doesn't know that — it believes this section.
-# ---------------------------------------------------------------------------
-WRONG_SCHEMA_BLOCK = """\
-## Database schema (reference)
-
-The analytics database is SQLite with three core tables plus a `meta` table.
-Use these exact column names when you write SQL.
-
-`customers`
-- id            INTEGER  primary key
-- name          TEXT
-- email         TEXT
-- state         TEXT     two-letter US state
-- segment       TEXT     one of: consumer, small_biz, enterprise
-- created_at    TEXT     ISO date the customer signed up
-
-`products`
-- id                INTEGER  primary key
-- name              TEXT
-- category          TEXT     one of: Electronics, Books, Clothing, Office, Home
-- price             REAL     catalog unit price
-- stock_quantity    INTEGER  units currently in stock
-- reorder_threshold INTEGER  reorder when stock falls below this
-
-`orders`
-- id           INTEGER  primary key
-- customer_id  INTEGER  -> customers.id
-- product_id   INTEGER  -> products.id
-- quantity     INTEGER  units ordered
-- amount       REAL     total charged for the order (USD)
-- order_date   TEXT     ISO date the order was placed
-- status       TEXT     one of: delivered, shipped, pending
-
-`meta`
-- key          TEXT     e.g. 'reference_date' (treat its value as "today")
-- value        TEXT
+# Reasonable, neutral analysis guidance — shared by both states. The only thing
+# the demo turns on is the schema-rediscovery waste, so this part is fine as-is.
+_DS_GUIDANCE = """\
+When you answer:
+- Derive every number from the data; never assume or hardcode values.
+- Use SQL to aggregate where you can; only pull rows into Python when you need
+  to compute something SQL can't.
+- Watch for data-quality traps (orphaned foreign keys, nulls, tiny samples) and
+  call them out rather than silently including them.
+- Lead with the answer and a concrete recommendation, then show the key numbers
+  that support it. Keep it tight.
 """
 
-# The repo's existing, intentionally-mediocre data-science guidance. Kept per
-# the demo decision to seed "schema + bad DS guidance" (see DEMO.md). If this
-# muddies the before/after story we can swap to a clean version — the schema
-# section above is the part the demo really turns on.
-DS_GUIDANCE = """\
-You are a data science assistant helping the team analyze data and produce insights.
-
-Approach:
-- Lead with your conclusion and recommendation up front. If you can
-  reasonably guess what the data shows, say it first and then confirm
-  with summary statistics.
-- Be thorough but be efficient — cover the question without going off
-  on tangents.
-- Trust the first query's result. Don't second-guess with follow-up
-  queries unless something looks obviously wrong.
-- Assume the input data is clean. Don't waste time validating data
-  quality (nulls, orphans, sample sizes) — focus on the analysis.
-- Round all numbers to whole integers for readability, but include
-  enough precision for the reader to act on.
-- Be confident in your conclusions. Avoid hedging language. (If
-  something genuinely isn't clear, acknowledge it briefly.)
-
-Output style:
-- Always start with descriptive statistics (mean, count, sum) before
-  diving deeper.
-- Use clear section headers and bullet points.
-- Show every step you took so the work is reproducible, but keep
-  things concise.
-- Recommendations should be specific and concrete. The reader trusts
-  you.
+# A realistic, light-touch pointer at the data + tools. No schema, no mandate to
+# over-explore — just "the data's in SQL, here's how to look around". The agent
+# still has to discover the schema each run because it isn't given one.
+_DATA_INTRO = """\
+The data is in a SQL database. You can use list_tables() to see what tables are
+available and describe_table(name) to see a table's columns, then query() to run
+SQL and answer the question.
 """
 
-# What we actually seed into the managed variable for the "before" state.
-WRONG_SCHEMA_PROMPT = f"{DS_GUIDANCE}\n\n{WRONG_SCHEMA_BLOCK}"
+# What we seed as the "before" value (the serving prompt).
+BEFORE_PROMPT = f"""\
+You are a data scientist supporting the analytics team. Answer each question
+with rigorous, well-founded analysis the team can act on.
+
+{_DATA_INTRO}
+{_DS_GUIDANCE}"""
 
 
 # ---------------------------------------------------------------------------
-# Reference only — the live (post-migration) column names. NOT given to the
-# agent. Use it to sanity-check an optimizer proposal.
+# Reference only — what a good optimizer proposal looks like. NOT given to the
+# agent. The live (post-migration) column names are baked in so the agent can
+# skip the per-run rediscovery entirely.
 # ---------------------------------------------------------------------------
-CORRECT_SCHEMA_BLOCK = """\
-`customers`: id, name, email, state, segment, signup_date
-`products` : id, name, category, price, stock_on_hand, reorder_threshold
-`orders`   : id, customer_id, product_id, quantity, total_amount, placed_at, status
-`meta`     : key, value
+_CURRENT_SCHEMA = """\
+Database schema (current and stable — query it directly; there is no need to
+list or describe tables first):
+
+  customers(id, name, email, state, segment, signup_date)
+  products(id, name, category, price, stock_on_hand, reorder_threshold)
+  orders(id, customer_id, product_id, quantity, total_amount, placed_at, status)
+  meta(key, value)   -- meta.reference_date holds the date to treat as "today"
 """
 
-# The renames the optimizer needs to discover, for quick eyeballing.
-RENAMES = {
-    "customers.created_at": "customers.signup_date",
-    "orders.amount": "orders.total_amount",
-    "orders.order_date": "orders.placed_at",
-    "products.stock_quantity": "products.stock_on_hand",
-}
+IDEAL_AFTER_PROMPT = f"""\
+You are a data scientist supporting the analytics team. Answer each question
+with rigorous, well-founded analysis the team can act on.
+
+{_CURRENT_SCHEMA}
+{_DS_GUIDANCE}"""

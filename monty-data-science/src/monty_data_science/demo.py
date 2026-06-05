@@ -48,7 +48,7 @@ from .demo_config import (
     load_env,
     model_name,
 )
-from .demo_prompts import WRONG_SCHEMA_PROMPT
+from .demo_prompts import BEFORE_PROMPT
 from .demo_questions import QUESTIONS
 from .logfire_links import _resolve_project_url
 from .quiet_code_mode import QuietCodeMode as CodeMode
@@ -64,8 +64,8 @@ def _get_var() -> Any:
     if _var is None:
         _var = logfire.var(
             VARIABLE_NAME,
-            default=WRONG_SCHEMA_PROMPT,
-            description="System prompt (incl. DB schema) for the data-science agent.",
+            default=BEFORE_PROMPT,
+            description="System prompt for the data-science agent.",
         )
     return _var
 

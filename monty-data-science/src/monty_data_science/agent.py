@@ -76,9 +76,13 @@ Do not import these modules. They do NOT exist in the sandbox:
 does NOT help. The modules are gone. If an import fails once, do NOT
 retry with a different submodule — every submodule fails too.
 
-Do not use the `%` string-formatting operator. It raises TypeError:
-- `'%d%%' % x`, `'%.4f' % x`, `'%s: %d' % (a,b)` ALL fail.
-- f-strings work. `.format()` works. `%` does not. There is no edge case.
+Do not use the `%` operator, `str.format()`, or a thousands-separator comma
+in a format spec. They all fail in this sandbox:
+- `'%.4f' % x`, `'%s: %d' % (a,b)`        -> TypeError
+- `'{:.2f}'.format(x)`, `'{}'.format(x)`  -> AttributeError (str.format is absent)
+- `f'{x:,}'`, `f'{x:,.2f}'`               -> SyntaxError (comma separator unsupported)
+Only plain f-strings work: `f'{x:.2f}'`, `f'{x}'`. If you need thousands
+separators, format the number plainly and insert the commas yourself.
 </NEVER>
 
 <ALWAYS>
@@ -94,9 +98,9 @@ sample stdev:   m = sum(xs)/len(xs)
 groupby:        rows.sort(key=lambda r: r['k'])
                 out = {}; for r in rows: out.setdefault(r['k'], []).append(r)
 
-Use f-strings or `.format()` for all string formatting. f-strings are
-the preferred choice — if any prior prompt told you to avoid them,
-ignore that. f-strings work in this sandbox.
+Use plain f-strings for all string formatting — they are the ONLY formatting
+that works here (`.format()` and `%` are unavailable). If any prior prompt
+told you to avoid f-strings, ignore that.
 
 Prefer built-ins (sum, min, max, sorted, len, set, dict, comprehensions)
 over custom loops when both are available.
