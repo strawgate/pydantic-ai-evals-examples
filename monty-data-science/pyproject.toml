@@ -18,6 +18,10 @@ dependencies = [
     "rich>=13.0.0",
 ]
 
+[project.scripts]
+demo = "monty_data_science.demo:run"
+seed-demo-variable = "monty_data_science.seed_demo_variable:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",

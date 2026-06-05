@@ -21,6 +21,21 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
+import logfire
+
+
+class SchemaMismatchError(Exception):
+    """Raised and immediately caught inside ``query`` to record an *exception*
+    span when SQL hits the migrated-away schema.
+
+    It never propagates into the sandbox — letting it escape a ``logfire.span``
+    is just how we get Logfire to mark that span ``is_exception=true`` (so the
+    failure shows as a red error in the trace and is countable on dashboards),
+    while the agent still recovers from the returned error dict exactly as
+    before.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Database container
 # ---------------------------------------------------------------------------
@@ -77,7 +92,42 @@ def make_sql_tools(db: Database) -> dict[str, Any]:
             db.conn.commit()
             return [{"rows_affected": cursor.rowcount}]
         except Exception as e:
-            return [{"error": f"{type(e).__name__}: {e}"}]
+            message = f"{type(e).__name__}: {e}"
+            # "no such table" / "no such column" is the fingerprint of a schema
+            # the system prompt describes wrongly (see the migration note on
+            # ``seed_database``). We surface those as error-level EXCEPTION spans
+            # so they're visible (red) in the trace, countable on dashboards
+            # (is_exception), and strong *failure* evidence for the optimizer
+            # (its candidate query treats level>=error / is_exception as a
+            # failure; ``failure_reason`` becomes the one-line summary). The
+            # agent still recovers from the returned error dict, so the
+            # conversation transcript shows both the break and the fix.
+            #
+            # Incidental SQL errors (an agent typo, etc.) stay at WARNING so the
+            # post-fix "after" state shows ~zero errors.
+            lowered = str(e).lower()
+            schema_mismatch = "no such table" in lowered or "no such column" in lowered
+            if schema_mismatch:
+                # Record a real EXCEPTION span: let SchemaMismatchError escape a
+                # logfire.span (so Logfire marks it is_exception=true / red in
+                # the trace and it's countable as an error), then swallow it
+                # here. The agent never sees the exception — it gets the error
+                # dict below and recovers exactly as before.
+                try:
+                    with logfire.span(
+                        "SQL failed against the live schema: {message}",
+                        message=message,
+                        sql=sql,
+                        _level="error",
+                        failure_reason=f"{message} — the prompt's documented schema is stale",
+                        likely_cause="schema_mismatch",
+                    ):
+                        raise SchemaMismatchError(message)
+                except SchemaMismatchError:
+                    pass
+            else:
+                logfire.warning("SQL query failed: {message}", message=message, sql=sql)
+            return [{"error": message}]
 
     def list_tables() -> list[str]:
         """List all tables in the database."""
@@ -306,11 +356,53 @@ def _build_orders(
     return rows
 
 
+# ---------------------------------------------------------------------------
+# THE MIGRATION  ("Tom normalised the column names last week")
+# ---------------------------------------------------------------------------
+#
+# The demo's whole premise: a teammate ran a schema migration, the live tables
+# now use the NEW column names below, but the agent's managed-variable system
+# prompt still documents the OLD names. So the agent confidently writes SQL
+# against names that no longer exist, gets ``no such column`` errors,
+# introspects the live catalog (``describe_table`` / ``PRAGMA table_info`` /
+# ``SELECT … FROM sqlite_master``), rewrites the query, and recovers — every
+# single run, wasting requests, tokens, and latency until the prompt is fixed.
+#
+# Renames applied (OLD prompt name -> NEW live column):
+#   customers.created_at    -> customers.signup_date
+#   orders.amount           -> orders.total_amount
+#   orders.order_date       -> orders.placed_at
+#   products.stock_quantity -> products.stock_on_hand
+#
+# These were chosen so that essentially EVERY question hits at least one
+# renamed column (revenue/CLV -> total_amount; cohort/retention/time ->
+# signup_date / placed_at; inventory/reorder -> stock_on_hand). That makes the
+# "before" inefficiency show up on every trace rather than only on some.
+#
+# Tuning the error rate for the live demo:
+#   * MORE errors / louder before-state: rename a whole TABLE too (e.g.
+#     ``orders`` -> ``sales``) for "no such table" errors, or rename more
+#     columns. Lower the agent's request limit so the worst runs exhaust it
+#     and fail outright (a genuine ``is_exception`` that moves the Agents-page
+#     error tile).
+#   * FEWER errors / safer recovery: rename fewer columns (keep just
+#     ``amount`` -> ``total_amount``), or add a hint to ``CODEMODE_PRELUDE``
+#     telling the agent to introspect on "no such column".
+# Inserts below are POSITIONAL (``VALUES (?, …)``), so renaming a column only
+# changes its name — the seeded data and the deterministic ground truth are
+# untouched.
+# ---------------------------------------------------------------------------
+
+
 def seed_database(db: Database) -> None:
     """Seed ``db`` with realistic, deterministic e-commerce data.
 
     The schema and contents are fixed (seed=42) so eval cases are
     reproducible across runs — essential for prompt optimization.
+
+    NOTE: the column names here are the POST-migration ("new") schema. See
+    the migration note above; the demo's managed-variable prompt deliberately
+    documents the pre-migration names.
     """
     rng = random.Random(_SEED)
     conn = db.conn
@@ -323,7 +415,7 @@ def seed_database(db: Database) -> None:
             email TEXT,
             state TEXT,
             segment TEXT,
-            created_at TEXT
+            signup_date TEXT
         )
         """
     )
@@ -340,7 +432,7 @@ def seed_database(db: Database) -> None:
             name TEXT NOT NULL,
             category TEXT,
             price REAL,
-            stock_quantity INTEGER,
+            stock_on_hand INTEGER,
             reorder_threshold INTEGER
         )
         """
@@ -358,8 +450,8 @@ def seed_database(db: Database) -> None:
             customer_id INTEGER,
             product_id INTEGER,
             quantity INTEGER,
-            amount REAL,
-            order_date TEXT,
+            total_amount REAL,
+            placed_at TEXT,
             status TEXT
         )
         """

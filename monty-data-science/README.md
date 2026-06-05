@@ -1,21 +1,81 @@
-# Monty Data Science Evals
+# Monty Data Science
 
-Multi-step data-science evals for a Pydantic AI agent running in the
-Monty CodeMode sandbox with SQL tools on a pre-seeded SQLite database.
+This repo has two things in it:
+
+1. **The continuous-improvement demo** (`make demo-start`) — the main event. See
+   below and **[DEMO.md](DEMO.md)** for the full stage runbook.
+2. **An eval harness** (`make eval`) — multi-step data-science evals for the same
+   agent. Separate from the demo; see [Eval harness](#eval-harness-separate-from-the-demo).
 
 Built on [Pydantic AI](https://ai.pydantic.dev/),
-[Pydantic Evals](https://pydantic.dev/docs/ai/evals/evals/),
 [pydantic-ai-harness](https://github.com/pydantic/harness) (CodeMode),
-[pydantic-monty](https://github.com/pydantic/monty), and
-[Logfire](https://logfire.pydantic.dev/) (traces + managed variables).
+[pydantic-monty](https://github.com/pydantic/monty),
+[Pydantic Evals](https://pydantic.dev/docs/ai/evals/evals/), and
+[Logfire](https://logfire.pydantic.dev/) (traces + managed variables + the
+optimizer).
 
-## Quick start
+## The demo (start here)
+
+A Pydantic AI data-science agent runs in the background answering a stream of
+questions. Its system prompt — a **Logfire managed variable**
+(`data_science_agent_prompt`) — documents a database schema that a migration
+quietly renamed out from under it. So every run hits `no such column`,
+introspects the live schema, recovers, and answers — wasting requests, tokens,
+and latency. You then open the variable's **Optimize** tab in Logfire, click
+**Generate**, and the optimizer rewrites the prompt with the correct schema
+**from the traces alone** — no evals, no test suite. Restart the traffic and the
+Agents-page charts drop.
+
+### One-time setup
 
 ```bash
 uv sync
-cp .env.example .env       # fill in ANTHROPIC_API_KEY (or MINIMAX_*) + LOGFIRE_TOKEN
+cp .env.example .env       # then fill in the three secrets below
+```
+
+`.env` needs (see `.env.example`):
+
+| Var | What | Notes |
+|---|---|---|
+| `PYDANTIC_AI_GATEWAY_API_KEY` | model access | Pydantic AI Gateway key (`pylf_v2_…`) |
+| `LOGFIRE_TOKEN` | trace ingestion | project **write** token (`pylf_v1_…`) |
+| `LOGFIRE_API_KEY` | managed variables | **user API key** with `read_variables` + `write_variables` (a plain write token does NOT have these) |
+
+```bash
+make seed                  # create/reset the managed variable to the wrong-schema "before" state
+```
+
+### Run it
+
+```bash
+make demo-start            # generate trace traffic in the BACKGROUND (-> demo.log)
+make demo-status           # is it running? how many runs so far?
+make demo-logs             # follow the live log
+make demo-stop             # stop it
+make seed                  # reset the variable to the "before" state (fresh optimizer window)
+```
+
+- `make demo-start DEMO_ARGS="--workers 5"` — more concurrency, charts fill faster.
+- `uv run demo` — same traffic in the foreground (Ctrl-C to stop).
+- `uv run demo --once` — a single request; prints the full answer + token usage.
+
+The startup banner prints direct links to the **Agents page** and the variable's
+**Optimize** tab (`…/managed-variables/variables/data_science_agent_prompt/details`).
+
+> **Optimizer evidence window — the one gotcha.** The optimizer only considers
+> runs sent *since the served value last changed*. **Seed first, then start
+> traffic.** If you reseed or apply a new value in the UI, the clock resets and
+> you need fresh traffic before the Optimize tab shows matches again. If it says
+> "no matches": `make demo-start`, wait ~2 min, and check the tab's lookback
+> range isn't tiny.
+
+Full walkthrough, what to screenshot, and tuning knobs: **[DEMO.md](DEMO.md)**.
+
+## Eval harness (separate from the demo)
+
+```bash
 make check                 # lint + format + ty
-make reset-prompt          # create the managed system_prompt variable
+make reset-prompt          # create the managed system_prompt variable (eval path)
 make eval                  # small dataset, judge ON
 make eval-medium           # medium (5 offline + 1 online)
 make eval-large            # large (8 offline + 2 online)
@@ -24,27 +84,40 @@ make verify-spans          # pull recent scores + variable resolutions from Logf
 make live                  # online cases with OnlineEvaluation
 ```
 
-Every `make eval*` prints a direct URL to the variable's optimizer page.
+The eval path uses `ANTHROPIC_API_KEY` (or `MINIMAX_*`), not the gateway. Every
+`make eval*` prints a direct URL to the variable's optimizer page.
 
 ## Layout
 
 ```
 src/monty_data_science/
+  # --- the demo (make demo-start / seed) ---
+  demo.py             # background traffic runner (uv run demo); the connect4-style "spider"
+  demo_config.py      # shared names: variable, agent, model, gateway; .env loading + logfire config
+  demo_prompts.py     # WRONG_SCHEMA_PROMPT (old column names) + CORRECT_SCHEMA reference
+  demo_questions.py   # pool of DS questions the traffic picks from
+  seed_demo_variable.py # create/reset the managed variable to the before-state (uv run seed-demo-variable)
+  # --- shared agent + tools ---
   agent.py           # CodeMode agent + task() + CODEMODE_PRELUDE + managed-var resolve
   quiet_code_mode.py # CodeMode wrapper that suppresses ERROR spans on retry
-  tools.py           # Database + SQL tool factory + deterministic seed
+  tools.py           # Database + SQL tool factory + deterministic seed (POST-migration schema + "THE MIGRATION" note)
+  logfire_links.py   # resolve project URL, print optimizer link
+  # --- the eval harness ---
   evaluators.py      # EfficientExecution + DataScienceJudge (5-dim, deterministic overall)
   datasets.py        # load_dataset + offline/online mode filter
   live.py            # online runner with OnlineEvaluation
-  reset_prompt.py    # bump or wipe-and-reseed the managed variable
+  reset_prompt.py    # bump or wipe-and-reseed the eval managed variable
   verify_spans.py    # query Logfire for recent eval scores + variable spans
-  logfire_links.py   # resolve project URL, print optimizer link
 evals/
   conftest.py
   run_eval.py        # CLI runner
   test_eval.py       # pytest entrypoints
   datasets/{small,medium,large}.yaml
 ```
+
+The demo's entry points are the `[project.scripts]` in `pyproject.toml`
+(`demo`, `seed-demo-variable`) and the `make demo-*` / `make seed` targets in
+the `Makefile`.
 
 ## What the agent does
 
