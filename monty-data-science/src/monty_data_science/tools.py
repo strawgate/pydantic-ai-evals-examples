@@ -15,6 +15,7 @@ The seed embeds patterns that multi-step data-science tasks can exploit:
 
 from __future__ import annotations
 
+import json
 import random
 import sqlite3
 from dataclasses import dataclass, field
@@ -202,6 +203,42 @@ _PRODUCT_CATEGORIES = ["Electronics", "Books", "Clothing", "Office", "Home"]
 REFERENCE_DATE = date(2024, 7, 1)
 
 
+# Customer-attributes migration: ``state`` and ``segment`` used to be plain
+# columns; they now live — together with new fields Tom added (``region`` and a
+# nested ``acquisition`` object) — inside a JSON-serialized ``attributes`` TEXT
+# column. ``describe_table`` only reveals ``attributes TEXT``, NOT its keys, so
+# an agent must SELECT rows and json.loads / json_extract them to discover where
+# the data went, several follow-up queries deep. See the migration note on
+# ``seed_database`` and the demo prompts.
+_STATE_TO_REGION = {
+    "CA": "West",
+    "WA": "West",
+    "TX": "South",
+    "FL": "South",
+    "GA": "South",
+    "NY": "Northeast",
+    "MA": "Northeast",
+    "IL": "Midwest",
+}
+_ACQUISITION_CHANNELS = ["referral", "organic", "paid_search", "partner"]
+_ACQUISITION_CAMPAIGNS = ["q1-launch", "spring-promo", "retargeting", "none"]
+
+
+def _customer_attributes_json(cid: int, state: str, segment: str) -> str:
+    """Build the JSON ``attributes`` blob for a customer (deterministic by id)."""
+    return json.dumps(
+        {
+            "state": state,
+            "segment": segment,
+            "region": _STATE_TO_REGION[state],
+            "acquisition": {
+                "channel": _ACQUISITION_CHANNELS[cid % len(_ACQUISITION_CHANNELS)],
+                "campaign": _ACQUISITION_CAMPAIGNS[(cid * 7) % len(_ACQUISITION_CAMPAIGNS)],
+            },
+        }
+    )
+
+
 def _build_customers(rng: random.Random) -> list[tuple]:
     """50 customers signed up across 18 months, segmented by state/segment."""
     rows: list[tuple] = []
@@ -357,40 +394,42 @@ def _build_orders(
 
 
 # ---------------------------------------------------------------------------
-# THE MIGRATION  ("Tom normalised the column names last week")
+# THE MIGRATION  ("Tom moved customer attributes into a JSON column")
 # ---------------------------------------------------------------------------
 #
-# The demo's whole premise: a teammate ran a schema migration, the live tables
-# now use the NEW column names below, but the agent's managed-variable system
-# prompt still documents the OLD names. So the agent confidently writes SQL
-# against names that no longer exist, gets ``no such column`` errors,
-# introspects the live catalog (``describe_table`` / ``PRAGMA table_info`` /
-# ``SELECT … FROM sqlite_master``), rewrites the query, and recovers — every
-# single run, wasting requests, tokens, and latency until the prompt is fixed.
+# The demo's premise: a teammate ran a migration. ``customers.state`` and
+# ``customers.segment`` used to be plain columns; they were consolidated into a
+# JSON-serialized ``attributes`` TEXT column (SQLite has no JSONB), and Tom
+# added new fields while he was at it — ``region`` and a nested ``acquisition``
+# object (``channel`` / ``campaign``). The agent's managed-variable system
+# prompt still documents the OLD flat columns.
 #
-# Renames applied (OLD prompt name -> NEW live column):
-#   customers.created_at    -> customers.signup_date
-#   orders.amount           -> orders.total_amount
-#   orders.order_date       -> orders.placed_at
-#   products.stock_quantity -> products.stock_on_hand
+# Why JSON instead of a column rename: a rename is too cheap to recover from —
+# one ``describe_table`` reveals the new column name and the agent is back on
+# track in a single turn, so it barely moves tokens/latency. With JSON,
+# ``describe_table`` only reveals ``attributes TEXT`` — it CANNOT show the keys
+# inside the blob. So the agent has to SELECT rows and ``json.loads`` /
+# ``json_extract`` them, often sampling several rows to see the full structure
+# (including Tom's new fields), before it can rewrite its query. That's a real
+# multi-step investigation on EVERY run — the "expensive moment" that makes the
+# wasted work show up as meaningful tokens/latency/cost.
 #
-# These were chosen so that essentially EVERY question hits at least one
-# renamed column (revenue/CLV -> total_amount; cohort/retention/time ->
-# signup_date / placed_at; inventory/reorder -> stock_on_hand). That makes the
-# "before" inefficiency show up on every trace rather than only on some.
+# Live ``customers`` schema: (id, name, email, attributes, signup_date), where
+# ``attributes`` is JSON like:
+#   {"state": "CA", "segment": "enterprise", "region": "West",
+#    "acquisition": {"channel": "referral", "campaign": "q1-launch"}}
+# The other tables (orders, products, meta) are documented correctly in the
+# "before" prompt — the customers JSON is the sole mismatch, so the demo turns
+# on one clean, believable issue.
 #
-# Tuning the error rate for the live demo:
-#   * MORE errors / louder before-state: rename a whole TABLE too (e.g.
-#     ``orders`` -> ``sales``) for "no such table" errors, or rename more
-#     columns. Lower the agent's request limit so the worst runs exhaust it
-#     and fail outright (a genuine ``is_exception`` that moves the Agents-page
-#     error tile).
-#   * FEWER errors / safer recovery: rename fewer columns (keep just
-#     ``amount`` -> ``total_amount``), or add a hint to ``CODEMODE_PRELUDE``
-#     telling the agent to introspect on "no such column".
-# Inserts below are POSITIONAL (``VALUES (?, …)``), so renaming a column only
-# changes its name — the seeded data and the deterministic ground truth are
-# untouched.
+# The fix the optimizer should propose: bake the discovered JSON structure into
+# the prompt (the attributes keys + how to extract them) so the agent stops
+# re-investigating it every run.
+#
+# Tuning: to make the investigation deeper/wider, add more nested fields, make
+# the structure vary across rows, migrate an ``orders`` field too, or bump the
+# row counts (``range(1, 51)`` in ``_build_customers``) so each sampled-rows
+# query pulls more context. Inserts below stay POSITIONAL.
 # ---------------------------------------------------------------------------
 
 
@@ -413,16 +452,18 @@ def seed_database(db: Database) -> None:
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             email TEXT,
-            state TEXT,
-            segment TEXT,
+            attributes TEXT,
             signup_date TEXT
         )
         """
     )
     customers = _build_customers(rng)
     conn.executemany(
-        "INSERT INTO customers VALUES (?, ?, ?, ?, ?, ?)",
-        customers,
+        "INSERT INTO customers VALUES (?, ?, ?, ?, ?)",
+        [
+            (cid, name, email, _customer_attributes_json(cid, state, segment), signup)
+            for (cid, name, email, state, segment, signup) in customers
+        ],
     )
 
     conn.execute(

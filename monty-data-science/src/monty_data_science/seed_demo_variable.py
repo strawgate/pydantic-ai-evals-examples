@@ -104,7 +104,11 @@ def main() -> None:
 
     load_env(args.env)
     prompt = IDEAL_AFTER_PROMPT if args.after else BEFORE_PROMPT
-    state = "ideal AFTER (schema baked in)" if args.after else "BEFORE (no schema — discovers it each run)"
+    state = (
+        "ideal AFTER (customers JSON structure baked in)"
+        if args.after
+        else "BEFORE (stale schema — customers state/segment moved into a JSON column)"
+    )
     reset_variable(prompt)
     print(
         f"Reset '{VARIABLE_NAME}' to the {state} state (v1, label 'default' serving 100%). "
