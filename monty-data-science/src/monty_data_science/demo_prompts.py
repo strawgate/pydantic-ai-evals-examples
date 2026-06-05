@@ -1,35 +1,31 @@
-"""Prompts for the continuous-improvement demo (JSON-migration scenario).
+"""Prompts for the continuous-improvement demo (migration scenario).
 
-The agent's prompt bakes in the database schema so it doesn't have to list /
-describe tables on every run. Then a migration happened: ``customers.state`` and
-``customers.segment`` were consolidated into a JSON ``attributes`` column (with
-new fields ``region`` and a nested ``acquisition`` object added too — see
-``tools.seed_database``). Nobody updated the prompt.
+The agent's prompt bakes in a typed database schema so it doesn't have to list
+or describe tables on every run. Then Tom ran a migration and nobody updated
+the prompt. The migration did several things at once:
 
-``BEFORE_PROMPT`` is that now-stale prompt: it documents ``customers`` with flat
-``state`` / ``segment`` columns. So the agent writes SQL against columns that no
-longer exist, gets ``no such column``, and — because ``describe_table`` only
-reveals ``attributes TEXT``, not its keys — has to SELECT rows and
-``json.loads`` / ``json_extract`` them, sampling a few to see the full
-structure, before it can rewrite. A real multi-step investigation, every run.
+  * consolidated ``customers.state`` / ``customers.segment`` into a JSON
+    ``attributes`` column (adding ``region`` + a nested ``acquisition`` object),
+  * renamed ``customers.created_at``    -> ``signup_date``
+  * renamed ``orders.amount``           -> ``total_amount``
+  * renamed ``orders.order_date``       -> ``placed_at``
+  * renamed ``products.stock_quantity`` -> ``stock_on_hand``
 
-``IDEAL_AFTER_PROMPT`` is what a good optimizer proposal looks like: the
-``attributes`` JSON structure baked in (keys + how to extract them), so the
-agent queries it directly and skips the investigation. NOT given to the agent;
-it's the reference we compare proposals against.
+``BEFORE_PROMPT`` is that now-stale prompt (old typed schema). So on every run
+the agent writes SQL against columns that no longer exist, gets ``no such
+column``, and has to introspect: ``describe_table`` reveals the renamed columns
+cheaply, but for ``customers`` it only shows ``attributes TEXT`` — not the keys
+— so the agent must SELECT rows and ``json_extract`` them to find where state /
+segment went. A multi-step rediscovery, every run.
 
-Only ``customers`` is mis-documented — orders / products / meta are correct in
-both — so the demo turns on one clean, believable issue.
+``IDEAL_AFTER_PROMPT`` is what a good optimizer proposal looks like: the same
+typed schema with all the renames applied and the ``attributes`` JSON structure
+documented. NOT given to the agent — it's the reference we compare proposals
+against. The before→after diff is ~6 lines (4 renamed columns + the customers
+JSON line), so an applied proposal shows a satisfying multi-line change.
 """
 
 from __future__ import annotations
-
-# Correct in both states — only customers differs.
-_OTHER_TABLES = """\
-products(id, name, category, price, stock_on_hand, reorder_threshold)
-orders(id, customer_id, product_id, quantity, total_amount, placed_at, status)
-meta(key, value)   -- meta.reference_date holds the date to treat as "today"\
-"""
 
 _DS_GUIDANCE = """\
 When you answer:
@@ -42,12 +38,38 @@ When you answer:
   that support it. Keep it tight.\
 """
 
-# --- BEFORE: stale schema (customers still documented with flat columns) -----
-_BEFORE_SCHEMA = f"""\
-Database schema — query it directly; you do not need to list or describe tables.
+# --- BEFORE: stale typed schema (pre-migration column names) -----------------
+_BEFORE_SCHEMA = """\
+Database schema (query it directly; you do not need to list or describe tables):
 
-customers(id, name, email, state, segment, signup_date)
-{_OTHER_TABLES}\
+customers
+  id          INTEGER  primary key
+  name        TEXT
+  email       TEXT
+  state       TEXT     two-letter US state
+  segment     TEXT     consumer | small_biz | enterprise
+  created_at  TEXT     ISO date the customer signed up
+
+products
+  id                 INTEGER  primary key
+  name               TEXT
+  category           TEXT     Electronics | Books | Clothing | Office | Home
+  price              REAL     catalog unit price
+  stock_quantity     INTEGER  units currently in stock
+  reorder_threshold  INTEGER  reorder when stock falls below this
+
+orders
+  id           INTEGER  primary key
+  customer_id  INTEGER  -> customers.id
+  product_id   INTEGER  -> products.id
+  quantity     INTEGER  units ordered
+  amount       REAL     total charged for the order (USD)
+  order_date   TEXT     ISO date the order was placed
+  status       TEXT     delivered | shipped | pending
+
+meta
+  key    TEXT  e.g. 'reference_date' (treat its value as "today")
+  value  TEXT\
 """
 
 BEFORE_PROMPT = f"""\
@@ -59,19 +81,41 @@ with rigorous, well-founded analysis the team can act on.
 {_DS_GUIDANCE}"""
 
 
-# --- IDEAL AFTER: customers schema corrected to the JSON reality -------------
-_AFTER_SCHEMA = f"""\
-Database schema — query it directly; you do not need to list or describe tables.
+# --- IDEAL AFTER: typed schema with the migration applied --------------------
+_AFTER_SCHEMA = """\
+Database schema (query it directly; you do not need to list or describe tables):
 
-customers(id, name, email, attributes, signup_date)
-  -- `attributes` is a JSON-encoded TEXT column. Extract fields with SQLite's
-  -- json_extract, e.g. json_extract(attributes, '$.state'). Keys:
-  --   $.state                  (e.g. 'CA')
-  --   $.segment                (consumer | small_biz | enterprise)
-  --   $.region                 (West | South | Northeast | Midwest)
-  --   $.acquisition.channel    (referral | organic | paid_search | partner)
-  --   $.acquisition.campaign   (e.g. 'q1-launch')
-{_OTHER_TABLES}\
+customers
+  id           INTEGER  primary key
+  name         TEXT
+  email        TEXT
+  attributes   TEXT     JSON-encoded. Extract with json_extract(attributes, '$.<key>'). Keys:
+                        $.state (two-letter US state), $.segment (consumer | small_biz |
+                        enterprise), $.region (West | South | Northeast | Midwest),
+                        $.acquisition.channel (referral | organic | paid_search | partner),
+                        $.acquisition.campaign
+  signup_date  TEXT     ISO date the customer signed up
+
+products
+  id                 INTEGER  primary key
+  name               TEXT
+  category           TEXT     Electronics | Books | Clothing | Office | Home
+  price              REAL     catalog unit price
+  stock_on_hand      INTEGER  units currently in stock
+  reorder_threshold  INTEGER  reorder when stock falls below this
+
+orders
+  id            INTEGER  primary key
+  customer_id   INTEGER  -> customers.id
+  product_id    INTEGER  -> products.id
+  quantity      INTEGER  units ordered
+  total_amount  REAL     total charged for the order (USD)
+  placed_at     TEXT     ISO date the order was placed
+  status        TEXT     delivered | shipped | pending
+
+meta
+  key    TEXT  e.g. 'reference_date' (treat its value as "today")
+  value  TEXT\
 """
 
 IDEAL_AFTER_PROMPT = f"""\

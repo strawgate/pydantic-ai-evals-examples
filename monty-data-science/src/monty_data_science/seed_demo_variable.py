@@ -105,9 +105,9 @@ def main() -> None:
     load_env(args.env)
     prompt = IDEAL_AFTER_PROMPT if args.after else BEFORE_PROMPT
     state = (
-        "ideal AFTER (customers JSON structure baked in)"
+        "ideal AFTER (migration applied: renames + customers JSON)"
         if args.after
-        else "BEFORE (stale schema — customers state/segment moved into a JSON column)"
+        else "BEFORE (stale schema — pre-migration column names + flat customers)"
     )
     reset_variable(prompt)
     print(
