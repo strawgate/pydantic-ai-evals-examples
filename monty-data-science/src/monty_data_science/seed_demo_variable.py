@@ -28,7 +28,7 @@ import os
 import httpx
 
 from .demo_config import VARIABLE_NAME, load_env
-from .demo_prompts import WRONG_SCHEMA_PROMPT
+from .demo_prompts import BEFORE_PROMPT, IDEAL_AFTER_PROMPT
 
 # Logfire variables REST base. The demo tokens are US-region; override with
 # LOGFIRE_BASE_URL for other deployments.
@@ -47,8 +47,8 @@ def _base_and_token() -> tuple[str, str]:
     return base, token
 
 
-def _variable_body() -> dict[str, object]:
-    serialized = json.dumps(WRONG_SCHEMA_PROMPT)
+def _variable_body(prompt: str) -> dict[str, object]:
+    serialized = json.dumps(prompt)
     return {
         "name": VARIABLE_NAME,
         "description": "System prompt (incl. DB schema) for the data-science agent.",
@@ -62,7 +62,7 @@ def _variable_body() -> dict[str, object]:
     }
 
 
-def reset_variable() -> None:
+def reset_variable(prompt: str) -> None:
     base, token = _base_and_token()
     headers = {"Authorization": f"Bearer {token}"}
     with httpx.Client(base_url=base, headers=headers, timeout=20, follow_redirects=True) as client:
@@ -72,7 +72,7 @@ def reset_variable() -> None:
                 f"Failed to delete '{VARIABLE_NAME}': {delete.status_code} {delete.text[:300]}\n"
                 f"(403 => LOGFIRE_API_KEY lacks write_variables on this project.)"
             )
-        create = client.post("/v1/variables/", json=_variable_body())
+        create = client.post("/v1/variables/", json=_variable_body(prompt))
         if not create.is_success:
             raise SystemExit(
                 f"Failed to create '{VARIABLE_NAME}': {create.status_code} {create.text[:300]}"
@@ -92,15 +92,27 @@ def main() -> None:
         description="Reset the demo managed variable to the wrong-schema before-state"
     )
     parser.add_argument("--env", default=None, help="Path to .env (auto-detected if omitted)")
+    parser.add_argument(
+        "--after",
+        action="store_true",
+        help="Seed the IDEAL 'after' value (schema baked in) instead of the before-state. "
+        "For A/B measuring the optimization's effect.",
+    )
     # Accepted for back-compat; seeding is always a clean reset now.
     parser.add_argument("--wipe", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     load_env(args.env)
-    reset_variable()
+    prompt = IDEAL_AFTER_PROMPT if args.after else BEFORE_PROMPT
+    state = (
+        "ideal AFTER (migration applied: renames + customers JSON)"
+        if args.after
+        else "BEFORE (stale schema — pre-migration column names + flat customers)"
+    )
+    reset_variable(prompt)
     print(
-        f"Reset '{VARIABLE_NAME}' to the wrong-schema before-state (v1, label 'default' "
-        f"serving 100%). Run traffic now — the optimizer only sees runs sent after this."
+        f"Reset '{VARIABLE_NAME}' to the {state} state (v1, label 'default' serving 100%). "
+        f"Run traffic now — the optimizer only sees runs sent after this."
     )
 
 

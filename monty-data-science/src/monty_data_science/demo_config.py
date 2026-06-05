@@ -27,7 +27,7 @@ DEFAULT_SERVICE_NAME = "monty-data-science"
 
 # Model the agent runs on, via the Pydantic AI Gateway (reads
 # PYDANTIC_AI_GATEWAY_API_KEY). Override with MODEL in the env.
-DEFAULT_MODEL = "gateway/anthropic:claude-sonnet-4-5"
+DEFAULT_MODEL = "gateway/anthropic:claude-opus-4-8"
 
 _PKG_DIR = Path(__file__).resolve().parent  # .../src/monty_data_science
 _SRC_DIR = _PKG_DIR.parent  # .../src
